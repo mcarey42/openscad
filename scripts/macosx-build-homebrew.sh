@@ -47,8 +47,17 @@ then
 	log "Tapping openscad homebrew repo"
 	TAP=brew
 fi
-$TAP tap openscad/homebrew-tap
+# On a fresh machine, this first tap attempt reliably fails: `brew tap`
+# validates every formula in the tap as part of completing the tap, and
+# that validation itself requires trust -- which we haven't granted yet.
+# `brew trust` then succeeds on its own, but doesn't retroactively finish
+# the aborted tap, leaving its formulae (lib3mf, sparkle) permanently
+# unresolvable for the rest of the run. Retrying the tap after trust is
+# granted fixes it; this retry is a harmless no-op if the first attempt
+# already succeeded.
+$TAP tap openscad/homebrew-tap || true
 $TAP trust openscad/homebrew-tap
+$TAP tap openscad/homebrew-tap
 
 for formula in pkg-config boost eigen cgal glew glib opencsg freetype libzip libxml2 fontconfig harfbuzz lib3mf double-conversion imagemagick ccache ghostscript tbb catch2; do
   log "Installing formula $formula"
