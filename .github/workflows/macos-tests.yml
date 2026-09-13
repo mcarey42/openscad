@@ -17,7 +17,9 @@ jobs:
   build_and_test:
     strategy:
       matrix:
-        os: [macos-15, macos-latest]
+        # Intel macOS (macos-15) is intentionally not built here: this fork
+        # only targets native Apple Silicon (arm64) on modern macOS.
+        os: [macos-latest]
         qt: [qt5, qt6]
         exclude:
           # QScintilla for qt5 is not longer available on Homebrew, and
@@ -66,21 +68,19 @@ jobs:
       # Disable pdf export test on macOS because Cairo >= 1.18 on Homebrew uses the
       # Quartz backend which doesn't have the Liberation Sans font we use.
       #
-      # On macos-latest (arm64), also skip the render-/preview-/throwntogether-
-      # test categories: these compare rendered PNG screenshots and depend on
-      # the GitHub-hosted arm64 runner's software OpenGL renderer, which is
-      # broken (see actions/runner-images#9712, openscad#5201). Real Apple
-      # Silicon hardware renders these correctly; this is a CI-runner-only
-      # limitation, not an OpenSCAD defect. All non-GL test categories
-      # (parser, CSG, CGAL, file export/import, etc.) still run here.
+      # Also skip the render-/preview-/throwntogether- test categories: these
+      # compare rendered PNG screenshots and depend on the GitHub-hosted
+      # arm64 runner's software OpenGL renderer, which is broken (see
+      # actions/runner-images#9712, openscad#5201). Real Apple Silicon
+      # hardware renders these correctly (verified locally) -- this is a
+      # CI-runner-only limitation, not an OpenSCAD defect, but since this
+      # fork only builds arm64 there's no macOS leg left that could run
+      # them in CI. GL/rendering correctness must be checked manually on
+      # real hardware until GitHub ships a working arm64 GPU runner image.
       run: |
         cd build
         export NUMCPU=$(($(sysctl -n hw.ncpu) * 3 / 2))
-        if [ "${{ matrix.os }}" = "macos-latest" ]; then
-          ctest -j$NUMCPU -E 'pdfexporttest|^(render|preview|throwntogether)-'
-        else
-          ctest -j$NUMCPU -E pdfexporttest
-        fi
+        ctest -j$NUMCPU -E 'pdfexporttest|^(render|preview|throwntogether)-'
     - name: Upload Test Result Report
       uses: actions/upload-artifact@v7
       if: ${{ always() }}
