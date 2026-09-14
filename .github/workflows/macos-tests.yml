@@ -68,17 +68,24 @@ jobs:
       # Disable pdf export test on macOS because Cairo >= 1.18 on Homebrew uses the
       # Quartz backend which doesn't have the Liberation Sans font we use.
       #
-      # Also skip test categories that compare rendered PNG screenshots:
-      # render-/preview-/throwntogether- (all pass cleanly here), plus
-      # openscad-cam* (camera-angle previews), lazyunion-preview, and
-      # openscad-imgstretch2 -- confirmed on a live run to fail on the
-      # GitHub-hosted arm64 runner's broken software OpenGL renderer (see
-      # actions/runner-images#9712, openscad#5201) even though the other
-      # PNG-comparison categories above happened to pass. Rather than
-      # whack-a-mole individual camera angles/tests as they flake, skip
-      # the whole openscad-cam*/lazyunion-preview families together, since
-      # partial failure within a family suggests the rest are equally
-      # marginal on this runner, not reliably passing.
+      # Also skip test categories that compare live-rendered PNG
+      # screenshots: render-/preview-/throwntogether-, the openscad-cam*/
+      # colorscheme*/imgsize/imgstretch* families (default-preview PNG
+      # output), and lazyunion-preview. Across two live CI runs, different
+      # individual tests within the openscad-* family flaked each time
+      # (imgstretch2 first, then imgsize, with everything else passing
+      # both times) on the GitHub-hosted arm64 runner's broken software
+      # OpenGL renderer (see actions/runner-images#9712, openscad#5201) --
+      # so rather than whack-a-mole individual tests as they flake run to
+      # run, the whole family is skipped: partial, shifting failure within
+      # a family means the rest are equally marginal, not reliably
+      # passing, even on runs where they happen not to fail.
+      #
+      # NOT skipped: export-pdf(-fill), svgimport, svgviewbox-,
+      # {off,3mf}colorpngtest, and lazyunion-render(-dxf/-stl/-svg). These
+      # also produce PNG output for comparison, but via a --render pass or
+      # an external rasterizer rather than the live default-preview GL
+      # path, and have passed cleanly on both live runs so far.
       #
       # Real Apple Silicon hardware renders all of this correctly
       # (verified locally) -- this is a CI-runner-only limitation, not an
@@ -89,7 +96,7 @@ jobs:
       run: |
         cd build
         export NUMCPU=$(($(sysctl -n hw.ncpu) * 3 / 2))
-        ctest -j$NUMCPU -E 'pdfexporttest|^(render|preview|throwntogether)-|^openscad-cam|^openscad-imgstretch2|^lazyunion-preview'
+        ctest -j$NUMCPU -E 'pdfexporttest|^(render|preview|throwntogether)-|^openscad-(cam|colorscheme|imgsize|imgstretch)|^lazyunion-preview'
     - name: Upload Test Result Report
       uses: actions/upload-artifact@v7
       if: ${{ always() }}
