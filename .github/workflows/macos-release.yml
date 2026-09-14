@@ -1,0 +1,203 @@
+name: macOS arm64 Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version string to embed (defaults to YYYY.MM.DD)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build-sign-release:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: 'recursive'
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          elif [[ -n "${{ inputs.version }}" ]]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="$(date +%Y.%m.%d)"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version $VERSION"
+
+      - name: Install Homebrew packages
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+        run: |
+          export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
+          ./scripts/macosx-build-homebrew.sh
+
+      - name: Build OpenSCAD
+        run: |
+          mkdir build
+          cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_UNITY_BUILD=OFF \
+            -DEXPERIMENTAL=OFF \
+            -DUSE_CCACHE=OFF \
+            -DUSE_BUILTIN_OPENCSG=ON \
+            -DOPENSCAD_VERSION="${{ steps.version.outputs.version }}"
+          NUMCPU=$(sysctl -n hw.ncpu)
+          export NUMCPU
+          make -j"$NUMCPU"
+
+      - name: Deploy Qt frameworks into app bundle
+        run: |
+          cd build
+          macdeployqt OpenSCAD.app -no-strip
+
+      - name: Determine signing mode
+        id: signing
+        run: |
+          if [[ -n "${{ secrets.MACOS_CERT_P12 }}" ]]; then
+            echo "mode=signed" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=adhoc" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Import signing certificate
+        if: steps.signing.outputs.mode == 'signed'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+          KEYCHAIN_PATH="$RUNNER_TEMP/release-signing.keychain-db"
+
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN_PATH" -P "$MACOS_CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          EXISTING_KEYCHAINS=()
+          while IFS= read -r kc; do
+            EXISTING_KEYCHAINS+=("$kc")
+          done < <(security list-keychains -d user | sed -e 's/"//g' -e 's/^[[:space:]]*//')
+          security list-keychains -d user -s "$KEYCHAIN_PATH" "${EXISTING_KEYCHAINS[@]}"
+
+          rm -f "$RUNNER_TEMP/cert.p12"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+      - name: Code sign (Developer ID)
+        if: steps.signing.outputs.mode == 'signed'
+        env:
+          MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+        run: |
+          codesign --deep --force --options runtime --timestamp \
+            --sign "$MACOS_CODESIGN_IDENTITY" \
+            build/OpenSCAD.app
+          codesign --verify --deep --strict --verbose=2 build/OpenSCAD.app
+
+      - name: Code sign (ad hoc fallback, unsigned release)
+        if: steps.signing.outputs.mode == 'adhoc'
+        run: |
+          echo "::warning::No MACOS_CERT_P12 secret configured -- producing an ad-hoc signed, UNNOTARIZED build. This will show a Gatekeeper warning on other Macs."
+          codesign --deep --force --sign - build/OpenSCAD.app
+
+      - name: Create DMG
+        run: |
+          cd build
+          VERSION="${{ steps.version.outputs.version }}"
+          hdiutil create -volname "OpenSCAD-$VERSION" -srcfolder OpenSCAD.app -ov -format UDZO "OpenSCAD-$VERSION.dmg"
+
+      - name: Sign DMG
+        if: steps.signing.outputs.mode == 'signed'
+        env:
+          MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+        run: |
+          cd build
+          codesign --force --sign "$MACOS_CODESIGN_IDENTITY" "OpenSCAD-${{ steps.version.outputs.version }}.dmg"
+
+      - name: Notarize DMG
+        if: steps.signing.outputs.mode == 'signed'
+        env:
+          MACOS_NOTARY_KEY_P8: ${{ secrets.MACOS_NOTARY_KEY_P8 }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+        run: |
+          echo "$MACOS_NOTARY_KEY_P8" > "$RUNNER_TEMP/notary_key.p8"
+          cd build
+          xcrun notarytool submit "OpenSCAD-${{ steps.version.outputs.version }}.dmg" \
+            --key "$RUNNER_TEMP/notary_key.p8" \
+            --key-id "$MACOS_NOTARY_KEY_ID" \
+            --issuer "$MACOS_NOTARY_ISSUER_ID" \
+            --wait
+          xcrun stapler staple "OpenSCAD-${{ steps.version.outputs.version }}.dmg"
+          rm -f "$RUNNER_TEMP/notary_key.p8"
+
+      - name: Verify signed/notarized DMG
+        if: steps.signing.outputs.mode == 'signed'
+        run: |
+          cd build
+          spctl --assess --type open --context context:primary-signature -v "OpenSCAD-${{ steps.version.outputs.version }}.dmg"
+          xcrun stapler validate "OpenSCAD-${{ steps.version.outputs.version }}.dmg"
+
+      - name: Clean up signing keychain
+        if: always() && steps.signing.outputs.mode == 'signed'
+        run: |
+          security delete-keychain "$KEYCHAIN_PATH" || true
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: OpenSCAD-${{ steps.version.outputs.version }}-arm64
+          path: build/OpenSCAD-${{ steps.version.outputs.version }}.dmg
+
+      - name: Create GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          MODE="${{ steps.signing.outputs.mode }}"
+          NOTES_FILE="$RUNNER_TEMP/release-notes.md"
+
+          {
+            echo "### About this build"
+            echo "This is an **unofficial fork build** of [OpenSCAD](https://github.com/openscad/openscad),"
+            echo "not original work and not affiliated with the OpenSCAD project. It exists solely to"
+            echo "provide a native **arm64 (Apple Silicon)** macOS build with a small set of"
+            echo "cherry-picked upstream bugfixes -- see this fork's README for details."
+            echo ""
+            echo "**All credit belongs to the OpenSCAD developers and community.**"
+            echo "Please direct support, donations, bug reports, and feature requests to the"
+            echo "official project: https://github.com/openscad/openscad"
+            echo "Donate: https://opencollective.com/openscad/donate"
+            echo ""
+            if [[ "$MODE" == "signed" ]]; then
+              echo "### Signing"
+              echo "This build is signed with a Developer ID Application certificate and notarized by Apple."
+            else
+              echo "### ⚠️ UNSIGNED / UNNOTARIZED build"
+              echo "No code-signing credentials were configured for this build. macOS Gatekeeper will"
+              echo "block it by default -- this build is for testing only."
+            fi
+          } > "$NOTES_FILE"
+
+          gh release create "${GITHUB_REF_NAME}" \
+            "build/OpenSCAD-$VERSION.dmg" \
+            --title "OpenSCAD $VERSION (arm64)" \
+            --notes-file "$NOTES_FILE"
