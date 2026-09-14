@@ -1,3 +1,21 @@
+> ### About this fork
+> This repository ([mcarey42/openscad](https://github.com/mcarey42/openscad)) is **not
+> original work** and is **not affiliated with the OpenSCAD project**. It exists solely
+> to publish a **signed and notarized, native arm64 (Apple Silicon) macOS build**,
+> since the upstream project's last stable release predates Apple Silicon support
+> (`openscad-2021.01`, 2021). All it adds on top of upstream `master` is:
+> - A handful of small, cherry-picked bugfixes that were already open as pull
+>   requests upstream (see this fork's release notes for exact PR numbers) — this
+>   fork does not contain any original code changes of its own.
+> - macOS code signing, notarization, and DMG packaging for distribution.
+>
+> **All credit for OpenSCAD itself belongs to the [OpenSCAD developers and
+> community](https://github.com/openscad/openscad).** If this build is useful to you,
+> please direct any support, donations, bug reports, or feature requests to the
+> **official project**, not this fork:
+> - Upstream repo: https://github.com/openscad/openscad
+> - Donate: https://opencollective.com/openscad/donate
+
 [![GitHub (master)](https://img.shields.io/github/checks-status/openscad/openscad/master.svg?logo=github&label=build&logoColor=black&colorA=f9d72c&style=plastic)](https://github.com/openscad/openscad/actions)
 [![CircleCI (master)](https://img.shields.io/circleci/project/github/openscad/openscad/master.svg?logo=circleci&logoColor=black&colorA=f9d72c&style=plastic)](https://circleci.com/gh/openscad/openscad/tree/master)
 [![Coverity Scan](https://img.shields.io/coverity/scan/2510.svg?colorA=f9d72c&logoColor=black&style=plastic)](https://scan.coverity.com/projects/2510)
